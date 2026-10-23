@@ -38,18 +38,22 @@ export const GAME_CONFIG = {
       capsuleRadius: 0.4,
       capsuleHalfHeight: 0.5, // total height = 2*0.5 + 2*0.4 = 1.8m
       speed: 5.2, // m/s
+      requiredClearance: 1.85, // clearance threshold (m)
     },
     crouch: {
       eyeHeight: 1.05,
       capsuleRadius: 0.4,
       capsuleHalfHeight: 0.2, // total height = 2*0.2 + 2*0.4 = 1.2m
       speed: 2.8, // m/s
+      requiredClearance: 1.25, // clearance threshold (m)
     },
     prone: {
       eyeHeight: 0.35,
-      capsuleRadius: 0.3,
-      capsuleHalfHeight: 0.1, // total height = 2*0.1 + 2*0.3 = 0.8m
+      capsuleRadius: 0.25,
+      capsuleHalfHeight: 0.05, // total height = 2*0.05 + 2*0.25 = 0.6m
       speed: 1.4, // m/s
+      requiredClearance: 0.65, // clearance threshold (m)
+      inertialDropDuration: 0.35, // momentum decay when dropping into prone while sprinting
     },
     slide: {
       eyeHeight: 0.95,
@@ -73,6 +77,12 @@ export const GAME_CONFIG = {
     tacSprintMaxDuration: 3.0, // seconds
     tacSprintCooldown: 4.0, // seconds
     tacSprintAngleThreshold: Math.cos((25 * Math.PI) / 180), // ~0.906 forward cone
+    sprintForwardThreshold: 0.7, // forward alignment required to initiate sprint
+  },
+
+  // Input Tap Timings
+  input: {
+    doubleTapWindowMs: 300, // LeftShift double-tap threshold for Tactical Sprint
   },
 
   // Character Controller Tuning
@@ -88,20 +98,22 @@ export const GAME_CONFIG = {
     spawnPosition: { x: 0, y: 0.95, z: 0 },
   },
 
-  // Slide Dynamics
+  // Slide Dynamics & Slide Cancel
   slide: {
-    entryBoost: 1.25, // v_entry = v_current * 1.25
-    friction: 0.55, // mu_slide friction coefficient
-    minSpeed: 2.5, // m/s exit threshold
-    maxDuration: 1.4, // seconds max slide time
-    steeringDamping: 1.5, // rad/s maximum angular redirect rate
-    dutchRollAngle: (-2.5 * Math.PI) / 180, // slight camera roll during slide
+    entryBoost: 1.20, // Snappy entry boost
+    baseEntrySpeed: 9.0, // m/s
+    tacSprintEntrySpeed: 10.5, // m/s
+    friction: 0.65, // Snappy friction decay (slide lasts ~0.45s - 0.50s)
+    minSpeed: 3.8, // Exit threshold (m/s)
+    maxDuration: 0.50, // Short tactical slide duration (seconds)
+    steeringDamping: 2.2, // rad/s smooth redirect rate
+    dutchRollAngle: (-2.0 * Math.PI) / 180, // camera tilt during slide
   },
 
   // Mantle & Traversal
   mantle: {
     forwardRayDistance: 0.85, // meters forward from chest
-    chestHeightOffset: 0.9, // meters up from feet (reliably scans 1.0m - 1.8m obstacles)
+    chestHeightOffset: 0.9, // meters up from feet
     minLedgeHeight: 0.6, // min obstacle height (m)
     maxLedgeHeight: 1.8, // max obstacle height (m)
     duration: 0.45, // seconds for quadratic Bezier traversal

@@ -1,39 +1,37 @@
-export interface InputState {
+import { GAME_CONFIG } from '../config/gameConfig.ts';
+
+export interface ContinuousInputState {
   forward: boolean;
   backward: boolean;
   left: boolean;
   right: boolean;
-  jump: boolean;
-  sprint: boolean;
-  crouch: boolean;
-  prone: boolean;
 }
 
 export class InputManager {
   private _domElement: HTMLElement;
   private _isLocked: boolean = false;
 
-  private _state: InputState = {
+  // Continuous directional hold inputs
+  private _dirState: ContinuousInputState = {
     forward: false,
     backward: false,
     left: false,
     right: false,
-    jump: false,
-    sprint: false,
-    crouch: false,
-    prone: false,
   };
 
-  // Edge-triggered presses
-  private _jumpPressed: boolean = false;
-  private _crouchPressed: boolean = false;
-  private _pronePressed: boolean = false;
-  private _tacSprintPressed: boolean = false;
+  // Toggle & Action flags (consumed on read)
+  private _crouchAction: boolean = false;
+  private _proneAction: boolean = false;
+  private _jumpAction: boolean = false;
+  private _sprintTap: boolean = false;
+  private _tacSprintTap: boolean = false;
 
-  // Double-tap sprint detection
-  private _lastSprintTapTime: number = 0;
-  private readonly DOUBLE_TAP_WINDOW_MS: number = 300;
+  // Jump buffer & tap timing
+  private _lastJumpPressTime: number = 0;
+  private _lastShiftPressTime: number = 0;
+  private _isShiftHeld: boolean = false;
 
+  // Mouse deltas
   private _mouseDeltaX: number = 0;
   private _mouseDeltaY: number = 0;
 
@@ -65,49 +63,59 @@ export class InputManager {
 
   private _onKeyDown = (e: KeyboardEvent): void => {
     if (!this._isLocked) return;
-
-    if (e.repeat) return; // Prevent repeated press triggers for toggles
+    if (e.repeat) return; // Prevent OS key repetition from triggering multiple toggles
 
     switch (e.code) {
       case 'KeyW':
       case 'ArrowUp':
-        this._state.forward = true;
+        this._dirState.forward = true;
         break;
       case 'KeyS':
       case 'ArrowDown':
-        this._state.backward = true;
+        this._dirState.backward = true;
         break;
       case 'KeyA':
       case 'ArrowLeft':
-        this._state.left = true;
+        this._dirState.left = true;
         break;
       case 'KeyD':
       case 'ArrowRight':
-        this._state.right = true;
+        this._dirState.right = true;
         break;
-      case 'Space':
-        this._state.jump = true;
-        this._jumpPressed = true;
-        break;
-      case 'ShiftLeft':
-      case 'ShiftRight': {
-        const now = performance.now();
-        if (now - this._lastSprintTapTime <= this.DOUBLE_TAP_WINDOW_MS) {
-          this._tacSprintPressed = true;
-        }
-        this._lastSprintTapTime = now;
-        this._state.sprint = true;
-        break;
-      }
+
       case 'KeyC':
-        this._state.crouch = true;
-        this._crouchPressed = true;
+        // Crouch / Slide Toggle Action
+        this._crouchAction = true;
         break;
+
       case 'KeyZ':
       case 'ControlLeft':
-        this._state.prone = true;
-        this._pronePressed = true;
+        // Universal Prone Toggle Action
+        this._proneAction = true;
         break;
+
+      case 'Space':
+        // Jump / Slide Cancel / Ladder Push-off (with 150ms buffer)
+        this._jumpAction = true;
+        this._lastJumpPressTime = performance.now();
+        break;
+
+      case 'ShiftLeft':
+      case 'ShiftRight': {
+        this._isShiftHeld = true;
+        const now = performance.now();
+        const delta = now - this._lastShiftPressTime;
+        if (delta <= GAME_CONFIG.input.doubleTapWindowMs) {
+          // Double tap detected (< 300ms)
+          this._tacSprintTap = true;
+          this._sprintTap = false;
+        } else {
+          // Single tap detected
+          this._sprintTap = true;
+        }
+        this._lastShiftPressTime = now;
+        break;
+      }
     }
   };
 
@@ -115,33 +123,24 @@ export class InputManager {
     switch (e.code) {
       case 'KeyW':
       case 'ArrowUp':
-        this._state.forward = false;
+        this._dirState.forward = false;
         break;
       case 'KeyS':
       case 'ArrowDown':
-        this._state.backward = false;
+        this._dirState.backward = false;
         break;
       case 'KeyA':
       case 'ArrowLeft':
-        this._state.left = false;
+        this._dirState.left = false;
         break;
       case 'KeyD':
       case 'ArrowRight':
-        this._state.right = false;
+        this._dirState.right = false;
         break;
-      case 'Space':
-        this._state.jump = false;
-        break;
+
       case 'ShiftLeft':
       case 'ShiftRight':
-        this._state.sprint = false;
-        break;
-      case 'KeyC':
-        this._state.crouch = false;
-        break;
-      case 'KeyZ':
-      case 'ControlLeft':
-        this._state.prone = false;
+        this._isShiftHeld = false;
         break;
     }
   };
@@ -157,20 +156,19 @@ export class InputManager {
   };
 
   public resetInput(): void {
-    this._state = {
+    this._dirState = {
       forward: false,
       backward: false,
       left: false,
       right: false,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      prone: false,
     };
-    this._jumpPressed = false;
-    this._crouchPressed = false;
-    this._pronePressed = false;
-    this._tacSprintPressed = false;
+    this._crouchAction = false;
+    this._proneAction = false;
+    this._jumpAction = false;
+    this._lastJumpPressTime = 0;
+    this._isShiftHeld = false;
+    this._sprintTap = false;
+    this._tacSprintTap = false;
     this._mouseDeltaX = 0;
     this._mouseDeltaY = 0;
   }
@@ -213,32 +211,57 @@ export class InputManager {
     return delta;
   }
 
-  public consumeJumpPressed(): boolean {
-    const val = this._jumpPressed;
-    this._jumpPressed = false;
+  // --- Action Consumers ---
+  public consumeCrouchAction(): boolean {
+    const val = this._crouchAction;
+    this._crouchAction = false;
     return val;
   }
 
-  public consumeCrouchPressed(): boolean {
-    const val = this._crouchPressed;
-    this._crouchPressed = false;
+  public consumeProneAction(): boolean {
+    const val = this._proneAction;
+    this._proneAction = false;
     return val;
   }
 
-  public consumePronePressed(): boolean {
-    const val = this._pronePressed;
-    this._pronePressed = false;
+  public consumeJumpAction(): boolean {
+    const now = performance.now();
+    const isBuffered = (now - this._lastJumpPressTime) <= 150; // 150ms jump buffer
+    if (this._jumpAction || isBuffered) {
+      this._jumpAction = false;
+      this._lastJumpPressTime = 0;
+      return true;
+    }
+    return false;
+  }
+
+  public consumeSprintTap(): boolean {
+    const val = this._sprintTap;
+    this._sprintTap = false;
     return val;
   }
 
-  public consumeTacSprintPressed(): boolean {
-    const val = this._tacSprintPressed;
-    this._tacSprintPressed = false;
+  public consumeTacSprintTap(): boolean {
+    const val = this._tacSprintTap;
+    this._tacSprintTap = false;
     return val;
   }
 
-  public get state(): Readonly<InputState> {
-    return this._state;
+  public get directional(): Readonly<ContinuousInputState> {
+    return this._dirState;
+  }
+
+  public hasDirectionalInput(): boolean {
+    return (
+      this._dirState.forward ||
+      this._dirState.backward ||
+      this._dirState.left ||
+      this._dirState.right
+    );
+  }
+
+  public get isShiftHeld(): boolean {
+    return this._isShiftHeld;
   }
 
   public get isLocked(): boolean {
