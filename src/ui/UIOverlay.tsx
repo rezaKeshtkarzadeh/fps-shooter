@@ -3,13 +3,21 @@ import './UIOverlay.css';
 import type { LoopTelemetry } from '../core/GameLoop.ts';
 import type { CharacterState } from '../player/CharacterController.ts';
 import type { LocomotionState } from '../player/LocomotionFSM.ts';
+import type { WeaponFeedback } from '../weapons/WeaponController.ts';
 
 interface UIOverlayProps {
   isLocked: boolean;
   onRequestLock: () => void;
   telemetry: LoopTelemetry | null;
   characterState: CharacterState | null;
+  weaponFeedback: WeaponFeedback | null;
 }
+
+const TARGET_BLIPS = [
+  { name: 'Target 10m', x: 0, z: -10 },
+  { name: 'Target 23m', x: 7, z: -22 },
+  { name: 'Target 30m', x: -14, z: -26 },
+];
 
 function getStateBadgeClass(state: LocomotionState | undefined): string {
   switch (state) {
@@ -41,9 +49,14 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
   onRequestLock,
   telemetry,
   characterState,
+  weaponFeedback,
 }) => {
   const fsmState = characterState?.fsmState;
   const staminaPercent = Math.max(0, Math.min(100, (characterState?.tacSprintStamina ?? 1) * 100));
+
+  const hasHitmarker = (weaponFeedback?.hitmarkerTimer ?? 0) > 0;
+  const isKill = (weaponFeedback?.killmarkerTimer ?? 0) > 0;
+  const isADS = weaponFeedback?.isADS ?? false;
 
   return (
     <div className="ui-container">
@@ -51,8 +64,8 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
       {!isLocked && (
         <div className="blocker-screen" onClick={onRequestLock}>
           <div className="blocker-card">
-            <div className="blocker-title">TACTICAL FPS // PHASE 2</div>
-            <div className="blocker-subtitle">ADVANCED LOCOMOTION & TRAVERSAL FSM</div>
+            <div className="blocker-title">TACTICAL FPS // PHASE 3</div>
+            <div className="blocker-subtitle">WEAPONS, BALLISTICS & COMBAT SYSTEM</div>
 
             <div className="deploy-button">CLICK TO DEPLOY</div>
 
@@ -62,51 +75,127 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
                 <span>Movement</span>
               </div>
               <div className="control-item">
+                <span className="key-badge">L-CLICK</span>
+                <span>Fire Weapon</span>
+              </div>
+              <div className="control-item">
                 <span className="key-badge">SHIFT</span>
-                <span>Sprint / Double-tap Tac-Sprint</span>
+                <span>Switch Sprint / Tac-Sprint</span>
+              </div>
+              <div className="control-item">
+                <span className="key-badge">R-CLICK</span>
+                <span>Toggle Aim Down Sights (ADS)</span>
               </div>
               <div className="control-item">
                 <span className="key-badge">C</span>
-                <span>Crouch / Slide (while sprinting)</span>
+                <span>Crouch / Slide</span>
               </div>
               <div className="control-item">
-                <span className="key-badge">Z / CTRL</span>
-                <span>Prone Stance</span>
+                <span className="key-badge">R</span>
+                <span>Reload Magazine</span>
               </div>
               <div className="control-item">
                 <span className="key-badge">SPACE</span>
-                <span>Jump / Mantle Ledge / Ladder Push-off</span>
+                <span>Jump / Slide Cancel / Mantle</span>
               </div>
               <div className="control-item">
-                <span className="key-badge">ESC</span>
-                <span>Pause / Unlock Mouse</span>
+                <span className="key-badge">1 2 3 4 / WHEEL</span>
+                <span>Switch Weapon</span>
               </div>
             </div>
 
             <div className="verification-list">
-              <div><strong>Phase 2 Traversal Highlights:</strong></div>
-              <div>• <strong>Ceiling Raycast Check:</strong> 1.35m Tunnel prevents un-crouch clipping</div>
-              <div>• <strong>Dual-Ray Mantle:</strong> 1.2m & 1.7m barriers with Bézier trajectory</div>
-              <div>• <strong>Slide Physics:</strong> Slope acceleration down 25° ramp & Dutch roll</div>
-              <div>• <strong>Ladder Kinematics:</strong> 4.0m tower climb with top dismount & Space jump</div>
-              <div>• <strong>Procedural Camera:</strong> Critically damped spring & Lissajous head bob</div>
+              <div><strong>Phase 3 Combat Highlights:</strong></div>
+              <div>• <strong>Dual-Camera Viewmodel:</strong> Anti-clipping depth isolation (60° FOV)</div>
+              <div>• <strong>4 Weapon Classes:</strong> M4A1 (AR), MP5 (SMG), AX-50 (Sniper), 1911 (Pistol)</div>
+              <div>• <strong>Kinematics & Recoil:</strong> Damped spring kick + elastic camera recovery</div>
+              <div>• <strong>Hitbox Dummies:</strong> Head (2.0x), Torso (1.2x), Stomach (1.0x), Limbs (0.8x)</div>
+              <div>• <strong>Damage Falloff:</strong> Distance-dependent damage scaling formula</div>
             </div>
           </div>
         </div>
       )}
 
-      {/* 2. Tactical Crosshair */}
+      {/* 2. Tactical Crosshair & Dynamic Hitmarker */}
       {isLocked && (
-        <div className="crosshair">
-          <div className="crosshair-center" />
-          <div className="crosshair-bar top" />
-          <div className="crosshair-bar bottom" />
-          <div className="crosshair-bar left" />
-          <div className="crosshair-bar right" />
+        <div className={`crosshair-container ${isADS ? 'ads-active' : ''}`}>
+          {!isADS && (
+            <div className="crosshair">
+              <div className="crosshair-center" />
+              <div className="crosshair-bar top" />
+              <div className="crosshair-bar bottom" />
+              <div className="crosshair-bar left" />
+              <div className="crosshair-bar right" />
+            </div>
+          )}
+
+          {/* Hitmarker / Killmarker */}
+          {hasHitmarker && (
+            <div className={`hitmarker ${isKill ? 'killmarker' : ''}`}>
+              <div className="hitmarker-line tl" />
+              <div className="hitmarker-line tr" />
+              <div className="hitmarker-line bl" />
+              <div className="hitmarker-line br" />
+            </div>
+          )}
+
+          {/* Hit Damage Float (MW Style matching Image 1) */}
+          {hasHitmarker && weaponFeedback && (
+            <div className={`hit-toast ${isKill ? 'kill' : ''}`}>
+              +{Math.round(weaponFeedback.lastHitDamage)}
+              <span className="hit-toast-label">
+                {weaponFeedback.lastHitZone === 'HEAD' ? 'HEADSHOT' : weaponFeedback.lastHitZone}
+              </span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* 3. Live Diagnostics Panel */}
+      {/* 3. Weapon HUD (Bottom Right) */}
+      {weaponFeedback && (
+        <div className="weapon-hud">
+          <div className="weapon-header">
+            <span className="weapon-name">{weaponFeedback.weaponName}</span>
+            <span className="weapon-mode">{weaponFeedback.fireMode}</span>
+          </div>
+
+          <div className="ammo-row">
+            <span className="ammo-current">{weaponFeedback.ammoMag}</span>
+            <span className="ammo-slash">/</span>
+            <span className="ammo-reserve">{weaponFeedback.ammoReserve}</span>
+          </div>
+
+          {weaponFeedback.weaponState === 'RELOADING' && (
+            <div className="reload-bar-container">
+              <div
+                className="reload-bar-fill"
+                style={{ width: `${weaponFeedback.reloadProgress * 100}%` }}
+              />
+              <span className="reload-text">RELOADING</span>
+            </div>
+          )}
+
+          {weaponFeedback.weaponState === 'SPRINT_LOWER' && (
+            <div className={`weapon-status-tag ${characterState?.fsmState === 'SLIDE' ? 'slide' : 'sprint'}`}>
+              {characterState?.fsmState === 'SLIDE' ? 'SLIDING' : 'SPRINTING'}
+            </div>
+          )}
+
+          {weaponFeedback.weaponState === 'TAC_SPRINT_RAISE' && (
+            <div className="weapon-status-tag tacsprint">TAC-SPRINT</div>
+          )}
+
+          {weaponFeedback.weaponState === 'SPRINT_TO_FIRE' && (
+            <div className="weapon-status-tag s2f">RAISING WEAPON</div>
+          )}
+
+          {weaponFeedback.weaponState === 'HOLSTERED' && (
+            <div className="weapon-status-tag holster">HOLSTERED</div>
+          )}
+        </div>
+      )}
+
+      {/* 4. Live Diagnostics Panel */}
       <div className="telemetry-panel">
         <div className="telemetry-header">
           <span>SYS.DIAGNOSTICS</span>
@@ -114,9 +203,16 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
         </div>
 
         <div className="telemetry-row">
-          <span className="telemetry-label">LOCOMOTION FSM:</span>
+          <span className="telemetry-label">LOCOMOTION:</span>
           <span className={`state-badge ${getStateBadgeClass(fsmState)}`}>
             {fsmState ?? '--'}
+          </span>
+        </div>
+
+        <div className="telemetry-row">
+          <span className="telemetry-label">WEAPON FSM:</span>
+          <span className="telemetry-val val-cyan">
+            {weaponFeedback?.weaponState ?? '--'}
           </span>
         </div>
 
@@ -149,17 +245,6 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
         </div>
 
         <div className="telemetry-row">
-          <span className="telemetry-label">GROUNDED:</span>
-          <span
-            className={`telemetry-val ${
-              characterState?.isGrounded ? 'val-green' : 'val-amber'
-            }`}
-          >
-            {characterState ? (characterState.isGrounded ? 'YES' : 'AIRBORNE') : '--'}
-          </span>
-        </div>
-
-        <div className="telemetry-row">
           <span className="telemetry-label">POSITION (X/Y/Z):</span>
           <span className="telemetry-val">
             {characterState
@@ -174,6 +259,55 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
           </div>
         )}
       </div>
+
+      {/* 5. Tactical Minimap Radar (Top Right) */}
+      {characterState && (
+        <div className="minimap-container">
+          <div className="minimap-header">
+            <span>TAC.RADAR // 60M</span>
+            <span className="minimap-coords">
+              X:{characterState.position.x.toFixed(0)} Z:{characterState.position.z.toFixed(0)}
+            </span>
+          </div>
+          <div className="minimap-radar">
+            <div className="minimap-grid-h" />
+            <div className="minimap-grid-v" />
+            <div className="minimap-range-ring" />
+
+            {/* Compass points */}
+            <span className="compass-n">N</span>
+            <span className="compass-s">S</span>
+            <span className="compass-w">W</span>
+            <span className="compass-e">E</span>
+
+            {/* Target Dummies (Red Blips) */}
+            {TARGET_BLIPS.map((t, idx) => {
+              const left = Math.max(4, Math.min(96, ((t.x + 30) / 60) * 100));
+              const top = Math.max(4, Math.min(96, ((t.z + 30) / 60) * 100));
+              return (
+                <div
+                  key={idx}
+                  className="minimap-blip-target"
+                  style={{ left: `${left}%`, top: `${top}%` }}
+                  title={t.name}
+                />
+              );
+            })}
+
+            {/* Player Blip (Cyan Arrow aligned with Yaw) */}
+            <div
+              className="minimap-blip-player"
+              style={{
+                left: `${Math.max(4, Math.min(96, ((characterState.position.x + 30) / 60) * 100))}%`,
+                top: `${Math.max(4, Math.min(96, ((characterState.position.z + 30) / 60) * 100))}%`,
+                transform: `translate(-50%, -50%) rotate(${Math.round((-characterState.yaw * 180) / Math.PI)}deg)`,
+              }}
+            >
+              <div className="player-arrow" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

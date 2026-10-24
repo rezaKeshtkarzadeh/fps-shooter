@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GameEngine } from './core/GameEngine.ts';
 import type { LoopTelemetry } from './core/GameLoop.ts';
 import type { CharacterState } from './player/CharacterController.ts';
+import type { WeaponFeedback } from './weapons/WeaponController.ts';
 import { UIOverlay } from './ui/UIOverlay.tsx';
 import './App.css';
 
@@ -12,6 +13,7 @@ export default function App() {
   const [isLocked, setIsLocked] = useState<boolean>(false);
   const [telemetry, setTelemetry] = useState<LoopTelemetry | null>(null);
   const [characterState, setCharacterState] = useState<CharacterState | null>(null);
+  const [weaponFeedback, setWeaponFeedback] = useState<WeaponFeedback | null>(null);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -32,6 +34,9 @@ export default function App() {
           lastStateUpdateTime = now;
           setCharacterState(state);
         }
+      },
+      onWeaponFeedback: (feedback) => {
+        setWeaponFeedback(feedback);
       },
     });
 
@@ -61,6 +66,7 @@ export default function App() {
         onRequestLock={handleRequestLock}
         telemetry={telemetry}
         characterState={characterState}
+        weaponFeedback={weaponFeedback}
       />
     </div>
   );

@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { PhysicsWorld } from '../core/PhysicsWorld.ts';
 import { createGreyboxMaterials } from './materials.ts';
+import { HitboxTarget } from '../weapons/HitboxTarget.ts';
 
 export class GreyboxArena {
   public group: THREE.Group;
+  public targets: HitboxTarget[] = [];
   private _physicsWorld: PhysicsWorld;
 
   constructor(scene: THREE.Scene, physicsWorld: PhysicsWorld) {
@@ -25,6 +27,9 @@ export class GreyboxArena {
     this._buildLowCeilingTunnel(materials.wallMaterial);
     this._buildMantleObstacles(materials.boxMaterial);
     this._buildLadderTower(materials.wallMaterial, materials.stairMaterial);
+
+    // Phase 3 Compound Hitbox Target Dummies:
+    this._buildTargetDummies(scene);
 
     scene.add(this.group);
   }
@@ -294,5 +299,19 @@ export class GreyboxArena {
       rungMesh.castShadow = true;
       this.group.add(rungMesh);
     }
+  }
+
+  private _buildTargetDummies(scene: THREE.Scene): void {
+    // Dummy 1: Close range (10m ahead, max damage test)
+    const t1 = new HitboxTarget(scene, this._physicsWorld, { x: 0, y: 0, z: -10 });
+    this.targets.push(t1);
+
+    // Dummy 2: Mid range (23m, damage falloff slope test)
+    const t2 = new HitboxTarget(scene, this._physicsWorld, { x: 7, y: 0, z: -22 });
+    this.targets.push(t2);
+
+    // Dummy 3: Far range (30m, minimum damage threshold test)
+    const t3 = new HitboxTarget(scene, this._physicsWorld, { x: -14, y: 0, z: -26 });
+    this.targets.push(t3);
   }
 }

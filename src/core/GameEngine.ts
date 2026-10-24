@@ -5,10 +5,13 @@ import { InputManager } from './InputManager.ts';
 import { PlayerRoot } from '../player/PlayerRoot.ts';
 import { CharacterController, type CharacterState } from '../player/CharacterController.ts';
 import { GreyboxArena } from '../world/GreyboxArena.ts';
+import { WeaponController, type WeaponFeedback } from '../weapons/WeaponController.ts';
+import { GAME_CONFIG } from '../config/gameConfig.ts';
 
 export interface EngineCallbacks {
   onTelemetry?: (telemetry: LoopTelemetry) => void;
   onCharacterState?: (state: CharacterState) => void;
+  onWeaponFeedback?: (feedback: WeaponFeedback) => void;
   onLockChange?: (locked: boolean) => void;
 }
 
@@ -18,6 +21,7 @@ export class GameEngine {
   public physicsWorld!: PhysicsWorld;
   public playerRoot!: PlayerRoot;
   public characterController!: CharacterController;
+  public weaponController!: WeaponController;
   public inputManager!: InputManager;
   public arena!: GreyboxArena;
   public gameLoop!: GameLoop;
@@ -25,6 +29,8 @@ export class GameEngine {
   private _canvas!: HTMLCanvasElement;
   private _callbacks: EngineCallbacks;
   private _isDestroyed: boolean = false;
+  private _lastMouseDeltaX: number = 0;
+  private _lastMouseDeltaY: number = 0;
 
   constructor(callbacks: EngineCallbacks = {}) {
     this._callbacks = callbacks;
@@ -44,12 +50,12 @@ export class GameEngine {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMappingExposure = 1.15;
 
-    // 2. Setup Scene
+    // 2. Setup Scene (Bright Daylight Outdoor Training Range)
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#101214');
-    this.scene.fog = new THREE.FogExp2('#101214', 0.015);
+    this.scene.background = new THREE.Color('#8dc0ea');
+    this.scene.fog = new THREE.FogExp2('#b8d8f4', 0.004);
 
     // 3. Tactical Lighting
     this._setupLighting();
@@ -79,10 +85,27 @@ export class GameEngine {
       this.inputManager
     );
 
-    // 9. Setup Fixed Timestep Accumulator Game Loop (120 Hz)
+    // 9. Setup Weapons & Combat System (Phase 3)
+    this.weaponController = new WeaponController(
+      this.renderer,
+      this.playerRoot.camera,
+      this.physicsWorld
+    );
+
+    // Hook camera recoil directly into PlayerRoot
+    this.weaponController.setRecoilCallback((pitch, yaw) => {
+      this.playerRoot.applyRecoilOffset(pitch, yaw);
+    });
+
+    // Register all target dummies from the arena
+    for (const target of this.arena.targets) {
+      this.weaponController.registerTarget(target);
+    }
+
+    // 10. Setup Fixed Timestep Accumulator Game Loop (120 Hz)
     this.gameLoop = new GameLoop(
       (fixedDelta) => this._fixedUpdate(fixedDelta),
-      (_alpha, _frameDelta) => this._render(),
+      (_alpha, frameDelta) => this._render(frameDelta),
       (telemetry) => {
         if (this._callbacks.onTelemetry) {
           this._callbacks.onTelemetry(telemetry);
@@ -95,31 +118,36 @@ export class GameEngine {
   }
 
   private _setupLighting(): void {
-    // Ambient Light for subtle base illumination
-    const ambientLight = new THREE.AmbientLight('#ffffff', 0.4);
+    // Ambient Light for clean base illumination
+    const ambientLight = new THREE.AmbientLight('#ffffff', 0.85);
     this.scene.add(ambientLight);
 
-    // Hemisphere Light (sky vs ground tint)
-    const hemiLight = new THREE.HemisphereLight('#88a0b8', '#222830', 0.5);
+    // Hemisphere Light (sky blue vs warm ground bounce)
+    const hemiLight = new THREE.HemisphereLight('#cbe5fe', '#8fa2b5', 1.0);
     this.scene.add(hemiLight);
 
-    // Directional Sunlight with sharp tactical shadows
-    const sunLight = new THREE.DirectionalLight('#fff2db', 1.5);
-    sunLight.position.set(25, 40, 20);
+    // Directional Sunlight (crisp, warm daylight sun with sharp tactical shadows)
+    const sunLight = new THREE.DirectionalLight('#fffaf0', 2.6);
+    sunLight.position.set(30, 50, 25);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 2048;
     sunLight.shadow.mapSize.height = 2048;
     sunLight.shadow.camera.near = 0.5;
-    sunLight.shadow.camera.far = 100;
+    sunLight.shadow.camera.far = 120;
 
-    const d = 35;
+    const d = 40;
     sunLight.shadow.camera.left = -d;
     sunLight.shadow.camera.right = d;
     sunLight.shadow.camera.top = d;
     sunLight.shadow.camera.bottom = -d;
-    sunLight.shadow.bias = -0.0005;
+    sunLight.shadow.bias = -0.0003;
 
     this.scene.add(sunLight);
+
+    // Secondary fill light from opposite angle to prevent dark pockets
+    const fillLight = new THREE.DirectionalLight('#b0d6f5', 0.65);
+    fillLight.position.set(-25, 30, -20);
+    this.scene.add(fillLight);
   }
 
   private _fixedUpdate(fixedDelta: number): void {
@@ -127,6 +155,9 @@ export class GameEngine {
 
     // Apply accumulated mouse look
     const mouseDelta = this.inputManager.consumeMouseDelta();
+    this._lastMouseDeltaX = mouseDelta.deltaX;
+    this._lastMouseDeltaY = mouseDelta.deltaY;
+
     if (mouseDelta.deltaX !== 0 || mouseDelta.deltaY !== 0) {
       this.playerRoot.handleLookInput(mouseDelta.deltaX, mouseDelta.deltaY);
     }
@@ -137,15 +168,80 @@ export class GameEngine {
     // Advance Rapier world simulation
     this.physicsWorld.step();
 
+    // Weapon controls & state update
+    if (this.weaponController) {
+      if (this.inputManager.consumeReloadAction()) {
+        this.inputManager.cancelAds();
+        this.weaponController.tryReload();
+      }
+
+      const switchIntent = this.inputManager.consumeWeaponSwitch();
+      if (switchIntent) {
+        this.inputManager.cancelAds();
+        if (switchIntent.directSlot !== undefined) {
+          this.weaponController.selectWeapon(switchIntent.directSlot);
+        } else if (switchIntent.delta !== undefined) {
+          this.weaponController.cycleWeapon(switchIntent.delta);
+        }
+      }
+
+      const locoState = this.characterController.fsm.state;
+      if (locoState === 'LADDER') {
+        this.inputManager.cancelAds();
+      }
+
+      this.weaponController.setTriggerHeld(this.inputManager.isTriggerHeld);
+      this.weaponController.setAdsRequested(this.inputManager.isAdsHeld);
+
+      const camPos = new THREE.Vector3();
+      const camFwd = new THREE.Vector3();
+      this.playerRoot.camera.getWorldPosition(camPos);
+      this.playerRoot.camera.getWorldDirection(camFwd);
+
+      this.weaponController.fixedUpdate(
+        fixedDelta,
+        locoState,
+        camPos,
+        camFwd,
+        mouseDelta.deltaY
+      );
+
+      // Broadcast weapon feedback for UI HUD
+      if (this._callbacks.onWeaponFeedback) {
+        this._callbacks.onWeaponFeedback(this.weaponController.getFeedback());
+      }
+    }
+
     // Broadcast state for UI telemetry
     if (this._callbacks.onCharacterState) {
       this._callbacks.onCharacterState(this.characterController.getState());
     }
   }
 
-  private _render(): void {
+  private _render(frameDelta: number): void {
     if (this._isDestroyed) return;
-    this.renderer.render(this.scene, this.playerRoot.camera);
+
+    // Smooth render-frame viewmodel sway, ADS, and FOV interpolation
+    if (this.weaponController) {
+      const locoState = this.characterController.fsm.state;
+      this.weaponController.renderUpdate(
+        frameDelta,
+        locoState,
+        this._lastMouseDeltaX,
+        this._lastMouseDeltaY,
+        this.playerRoot.camera,
+        GAME_CONFIG.camera.fov
+      );
+
+      // Dual-camera render: main world first, clearDepth, then viewmodel on top
+      this.weaponController.viewmodelRenderer.render(this.scene);
+
+      // Settle mouse deltas for sway
+      this._lastMouseDeltaX *= 0.5;
+      this._lastMouseDeltaY *= 0.5;
+    } else {
+      this.renderer.render(this.scene, this.playerRoot.camera);
+    }
   }
 
   private _onResize = (): void => {
@@ -157,6 +253,9 @@ export class GameEngine {
     this.playerRoot.camera.updateProjectionMatrix();
 
     this.renderer.setSize(width, height);
+    if (this.weaponController) {
+      this.weaponController.onResize();
+    }
   };
 
   public requestLock(): void {
@@ -168,6 +267,7 @@ export class GameEngine {
     window.removeEventListener('resize', this._onResize);
     if (this.gameLoop) this.gameLoop.stop();
     if (this.inputManager) this.inputManager.dispose();
+    if (this.weaponController) this.weaponController.dispose();
     if (this.renderer) this.renderer.dispose();
   }
 }

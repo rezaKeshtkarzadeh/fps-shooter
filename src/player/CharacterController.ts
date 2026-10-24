@@ -20,6 +20,7 @@ export interface CharacterState {
   isTacSprinting: boolean;
   tacSprintStamina: number;
   isCeilingBlocked: boolean;
+  yaw: number;
 }
 
 export class CharacterController {
@@ -39,6 +40,7 @@ export class CharacterController {
   private _velocity: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
   private _isGrounded: boolean = false;
   private _isCeilingBlocked: boolean = false;
+  private _isSprintToggled: boolean = false;
 
   // Temp vectors
   private _tempForward: THREE.Vector3 = new THREE.Vector3();
@@ -154,11 +156,10 @@ export class CharacterController {
   ): void {
     const dirInput = this._inputManager.directional;
     const hasDirectional = this._inputManager.hasDirectionalInput();
-    const isShiftHeld = this._inputManager.isShiftHeld;
     const crouchAction = this._inputManager.consumeCrouchAction();
     const proneAction = this._inputManager.consumeProneAction();
     const jumpAction = this._inputManager.consumeJumpAction();
-    this._inputManager.consumeSprintTap();
+    const sprintTap = this._inputManager.consumeSprintTap();
     const tacSprintTap = this._inputManager.consumeTacSprintTap();
 
     this._isCeilingBlocked = false;
@@ -180,15 +181,28 @@ export class CharacterController {
     if (!this._isGrounded && this.fsm.state !== 'IN_AIR') {
       this.fsm.transitionTo('IN_AIR');
     } else if (this._isGrounded && this.fsm.state === 'IN_AIR' && this._velocity.y <= 0) {
-      const landStance = this.stanceManager.stance === 'stand' ? 'STAND' : 'CROUCH';
-      this.fsm.transitionTo(landStance);
+      if (this.stanceManager.stance === 'stand' && this._isSprintToggled && hasForwardMomentum) {
+        this.fsm.transitionTo('SPRINT');
+      } else {
+        const landStance = this.stanceManager.stance === 'stand' ? 'STAND' : 'CROUCH';
+        this.fsm.transitionTo(landStance);
+      }
     }
 
-    // --- Auto-Cancel Sprint when Shift is Released, Directional Keys Released, or Moving Backward ---
+    // --- Seamless Sprint-to-Combat: Smoothly decelerate into STAND while Aiming or Hipfiring ---
+    if (this._inputManager.isAdsHeld || this._inputManager.isTriggerHeld) {
+      if (this.fsm.state === 'SPRINT' || this.fsm.state === 'TACTICAL_SPRINT') {
+        this._isSprintToggled = false;
+        this.fsm.transitionTo('STAND');
+      }
+    }
+
+    // --- Auto-Cancel Sprint when Directional Keys Released or Moving Backward ---
     if (
       (this.fsm.state === 'SPRINT' || this.fsm.state === 'TACTICAL_SPRINT') &&
-      (!isShiftHeld || !hasDirectional || forwardAlignment < 0.2)
+      (!hasDirectional || forwardAlignment < 0.2)
     ) {
+      this._isSprintToggled = false;
       this.fsm.transitionTo('STAND');
     }
 
@@ -204,6 +218,7 @@ export class CharacterController {
           this.stanceManager.collider
         )
       ) {
+        this._isSprintToggled = false;
         this.fsm.transitionTo('MANTLE');
         this._velocity.set(0, 0, 0);
         return;
@@ -212,6 +227,7 @@ export class CharacterController {
 
     // --- Universal Prone (Z Key) ---
     if (proneAction) {
+      this._isSprintToggled = false;
       if (this.stanceManager.stance === 'prone') {
         // Multi-tier clearance sweep
         const targetStance = this.stanceManager.evaluateProneUnToggle(feetPos);
@@ -238,7 +254,7 @@ export class CharacterController {
         this._isGrounded &&
         hasForwardMomentum
       ) {
-        // Initiate Slide
+        // Initiate Slide (keeps _isSprintToggled active for fluid slide-cancel into sprint)
         const isTac = this.fsm.state === 'TACTICAL_SPRINT';
         this.slideController.initiateSlide(
           this._velocity,
@@ -249,63 +265,87 @@ export class CharacterController {
         );
         this.fsm.transitionTo('SLIDE');
         return;
-      } else if (this.stanceManager.stance === 'crouch') {
-        // Crouch to Stand
-        const clearStance = this.stanceManager.evaluateCrouchUnToggle(feetPos);
-        if (clearStance === 'stand') {
-          this.stanceManager.resizeCollider('stand');
-          this.fsm.transitionTo('STAND');
-        } else {
-          this._isCeilingBlocked = true;
-        }
-      } else if (this.stanceManager.stance === 'prone') {
-        // Prone to Crouch
-        const clearStance = this.stanceManager.evaluateProneUnToggle(feetPos);
-        if (clearStance === 'crouch' || clearStance === 'stand') {
-          this.stanceManager.resizeCollider('crouch');
-          this.fsm.transitionTo('CROUCH');
-        } else {
-          this._isCeilingBlocked = true;
-        }
       } else {
-        // Stand to Crouch
-        this.stanceManager.resizeCollider('crouch');
-        this.fsm.transitionTo('CROUCH');
-      }
-    }
-
-    // --- Sprint & Tactical Sprint (Hold LeftShift, Double-Tap for Tac-Sprint) ---
-    if (isShiftHeld && this._isGrounded && hasForwardMomentum) {
-      if (tacSprintTap && this.stanceManager.stance === 'stand' && this.fsm.canTacticalSprint(hasForwardMomentum)) {
-        this.fsm.transitionTo('TACTICAL_SPRINT');
-      } else if (this.fsm.state !== 'TACTICAL_SPRINT') {
+        this._isSprintToggled = false;
         if (this.stanceManager.stance === 'crouch') {
-          // Un-crouch to sprint if clear
+          // Crouch to Stand
           const clearStance = this.stanceManager.evaluateCrouchUnToggle(feetPos);
           if (clearStance === 'stand') {
             this.stanceManager.resizeCollider('stand');
-            if (this.fsm.canSprint(hasForwardMomentum)) {
-              this.fsm.transitionTo('SPRINT');
-            }
+            this.fsm.transitionTo('STAND');
           } else {
             this._isCeilingBlocked = true;
           }
-        } else if (this.stanceManager.stance === 'stand' && this.fsm.canSprint(hasForwardMomentum)) {
-          this.fsm.transitionTo('SPRINT');
+        } else if (this.stanceManager.stance === 'prone') {
+          // Prone to Crouch
+          const clearStance = this.stanceManager.evaluateProneUnToggle(feetPos);
+          if (clearStance === 'crouch' || clearStance === 'stand') {
+            this.stanceManager.resizeCollider('crouch');
+            this.fsm.transitionTo('CROUCH');
+          } else {
+            this._isCeilingBlocked = true;
+          }
+        } else {
+          // Stand to Crouch
+          this.stanceManager.resizeCollider('crouch');
+          this.fsm.transitionTo('CROUCH');
+        }
+      }
+    }
+
+    // --- Sprint & Tactical Sprint (Shift switches between SPRINT and TACTICAL_SPRINT) ---
+    if (sprintTap || tacSprintTap) {
+      this._inputManager.cancelAds(); // Sprinting cancels ADS
+
+      if (this.fsm.state === 'TACTICAL_SPRINT') {
+        // Switch from TACTICAL_SPRINT -> SPRINT
+        this._isSprintToggled = true;
+        this.fsm.transitionTo('SPRINT');
+      } else if (this.fsm.state === 'SPRINT') {
+        // Switch from SPRINT -> TACTICAL_SPRINT
+        if (this.stanceManager.stance === 'stand' && this.fsm.canTacticalSprint(hasForwardMomentum)) {
+          this._isSprintToggled = true;
+          this.fsm.transitionTo('TACTICAL_SPRINT');
+        }
+      } else if (this._isGrounded && hasForwardMomentum) {
+        // From STAND / CROUCH / PRONE -> enter SPRINT (or TACTICAL_SPRINT if double-tap)
+        let canSprint = true;
+        if (this.stanceManager.stance === 'crouch') {
+          const clearStance = this.stanceManager.evaluateCrouchUnToggle(feetPos);
+          if (clearStance === 'stand') {
+            this.stanceManager.resizeCollider('stand');
+          } else {
+            this._isCeilingBlocked = true;
+            canSprint = false;
+          }
+        } else if (this.stanceManager.stance === 'prone') {
+          const clearStance = this.stanceManager.evaluateProneUnToggle(feetPos);
+          if (clearStance === 'stand') {
+            this.stanceManager.resizeCollider('stand');
+          } else {
+            this._isCeilingBlocked = true;
+            canSprint = false;
+          }
+        }
+
+        if (canSprint) {
+          this._isSprintToggled = true;
+          if (tacSprintTap && this.stanceManager.stance === 'stand' && this.fsm.canTacticalSprint(hasForwardMomentum)) {
+            this.fsm.transitionTo('TACTICAL_SPRINT');
+          } else if (this.fsm.canSprint(hasForwardMomentum)) {
+            this.fsm.transitionTo('SPRINT');
+          }
         }
       }
     }
 
     // --- Jump / Un-Stance Action (Space Key) ---
-    // Req 3: press space -> crouch to stand if shift is not holding (or sprint if shift is held)
-    // Req 4: press space -> prone to stand if shift is not holding (or sprint if shift is held)
-    // When standing: execute normal Jump!
     if (jumpAction && this._isGrounded) {
       if (this.stanceManager.stance === 'crouch') {
         const clearStance = this.stanceManager.evaluateCrouchUnToggle(feetPos);
         if (clearStance === 'stand') {
           this.stanceManager.resizeCollider('stand');
-          if (isShiftHeld && hasForwardMomentum) {
+          if (this._isSprintToggled && hasForwardMomentum) {
             this.fsm.transitionTo('SPRINT');
           } else {
             this.fsm.transitionTo('STAND');
@@ -317,7 +357,7 @@ export class CharacterController {
         const targetStance = this.stanceManager.evaluateProneUnToggle(feetPos);
         if (targetStance === 'stand') {
           this.stanceManager.resizeCollider('stand');
-          if (isShiftHeld && hasForwardMomentum) {
+          if (this._isSprintToggled && hasForwardMomentum) {
             this.fsm.transitionTo('SPRINT');
           } else {
             this.fsm.transitionTo('STAND');
@@ -329,7 +369,7 @@ export class CharacterController {
           this._isCeilingBlocked = true;
         }
       } else {
-        // Already standing: execute Jump!
+        // Already standing / sprinting: execute Jump!
         this._velocity.y = GAME_CONFIG.movement.jumpVelocity;
         this._isGrounded = false;
         this.fsm.transitionTo('IN_AIR');
@@ -394,7 +434,7 @@ export class CharacterController {
     const proneAction = this._inputManager.consumeProneAction();
 
     // 1. Space Key -> MW2019 Slide Cancel:
-    // Transitions to SPRINT if Shift is held and moving forward, otherwise to STAND!
+    // Transitions to SPRINT if forward input is held and sprint toggled, otherwise to STAND!
     if (jumpAction) {
       this.slideController.cancel();
       this._playerRoot.setTargetRoll(0);
@@ -402,13 +442,13 @@ export class CharacterController {
       const clearStance = this.stanceManager.evaluateCrouchUnToggle(feetPos);
       if (clearStance === 'stand') {
         this.stanceManager.resizeCollider('stand');
-        const isShiftHeld = this._inputManager.isShiftHeld;
         const dirInput = this._inputManager.directional;
-        if (isShiftHeld && dirInput.forward) {
+        if (dirInput.forward && this._isSprintToggled) {
           this.fsm.transitionTo('SPRINT');
           this._velocity.x = this._tempForward.x * GAME_CONFIG.movement.sprintSpeed;
           this._velocity.z = this._tempForward.z * GAME_CONFIG.movement.sprintSpeed;
         } else {
+          this._isSprintToggled = false;
           this.fsm.transitionTo('STAND');
           this._velocity.x = 0;
           this._velocity.z = 0;
@@ -427,6 +467,7 @@ export class CharacterController {
 
     // 2. Crouch Action (C Key): player explicitly wants to cancel slide into crouch
     if (crouchAction) {
+      this._isSprintToggled = false;
       this.slideController.cancel();
       this._playerRoot.setTargetRoll(0);
       this.stanceManager.resizeCollider('crouch');
@@ -436,6 +477,7 @@ export class CharacterController {
 
     // 3. Universal Prone (Z Key): inertial drop into prone
     if (proneAction) {
+      this._isSprintToggled = false;
       this.slideController.cancel();
       this._playerRoot.setTargetRoll(0);
       this.stanceManager.resizeCollider('prone');
@@ -466,14 +508,14 @@ export class CharacterController {
       if (clearStance === 'stand') {
         this.stanceManager.resizeCollider('stand');
         const dirInput = this._inputManager.directional;
-        const isShiftHeld = this._inputManager.isShiftHeld;
-        if (isShiftHeld && dirInput.forward) {
+        if (dirInput.forward && this._isSprintToggled) {
           // Seamlessly transition back into sprint forward!
           this.fsm.transitionTo('SPRINT');
           this._velocity.x = this._tempForward.x * GAME_CONFIG.movement.sprintSpeed;
           this._velocity.z = this._tempForward.z * GAME_CONFIG.movement.sprintSpeed;
         } else {
           // Return to stand
+          this._isSprintToggled = false;
           this.fsm.transitionTo('STAND');
           this._velocity.x = 0;
           this._velocity.z = 0;
@@ -605,6 +647,7 @@ export class CharacterController {
       isTacSprinting: this.fsm.state === 'TACTICAL_SPRINT',
       tacSprintStamina: this.fsm.tacSprintStaminaFraction,
       isCeilingBlocked: this._isCeilingBlocked,
+      yaw: this._playerRoot.yaw,
     };
   }
 }

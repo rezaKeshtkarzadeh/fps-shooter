@@ -25,6 +25,13 @@ export class InputManager {
   private _jumpAction: boolean = false;
   private _sprintTap: boolean = false;
   private _tacSprintTap: boolean = false;
+  private _reloadAction: boolean = false;
+
+  // Weapon controls
+  private _isLeftMouseDown: boolean = false;
+  private _isAdsToggled: boolean = false;
+  private _weaponSwitchDelta: number = 0;
+  private _directWeaponSlot: number = -1;
 
   // Jump buffer & tap timing
   private _lastJumpPressTime: number = 0;
@@ -46,6 +53,10 @@ export class InputManager {
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('mousemove', this._onMouseMove);
+    window.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mouseup', this._onMouseUp);
+    window.addEventListener('wheel', this._onWheel, { passive: false });
+    window.addEventListener('contextmenu', this._onContextMenu);
     window.addEventListener('blur', this._onBlur);
     document.addEventListener('pointerlockchange', this._onPointerLockChange);
     document.addEventListener('mozpointerlockchange', this._onPointerLockChange);
@@ -55,6 +66,10 @@ export class InputManager {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('mousemove', this._onMouseMove);
+    window.removeEventListener('mousedown', this._onMouseDown);
+    window.removeEventListener('mouseup', this._onMouseUp);
+    window.removeEventListener('wheel', this._onWheel);
+    window.removeEventListener('contextmenu', this._onContextMenu);
     window.removeEventListener('blur', this._onBlur);
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
     document.removeEventListener('mozpointerlockchange', this._onPointerLockChange);
@@ -100,9 +115,32 @@ export class InputManager {
         this._lastJumpPressTime = performance.now();
         break;
 
+      case 'KeyR':
+        this._reloadAction = true;
+        this._isAdsToggled = false;
+        break;
+
+      case 'Digit1':
+        this._directWeaponSlot = 0;
+        this._isAdsToggled = false;
+        break;
+      case 'Digit2':
+        this._directWeaponSlot = 1;
+        this._isAdsToggled = false;
+        break;
+      case 'Digit3':
+        this._directWeaponSlot = 2;
+        this._isAdsToggled = false;
+        break;
+      case 'Digit4':
+        this._directWeaponSlot = 3;
+        this._isAdsToggled = false;
+        break;
+
       case 'ShiftLeft':
       case 'ShiftRight': {
         this._isShiftHeld = true;
+        this._isAdsToggled = false; // Sprint tap cancels ADS
         const now = performance.now();
         const delta = now - this._lastShiftPressTime;
         if (delta <= GAME_CONFIG.input.doubleTapWindowMs) {
@@ -145,6 +183,37 @@ export class InputManager {
     }
   };
 
+  private _onMouseDown = (e: MouseEvent): void => {
+    if (!this._isLocked) return;
+    if (e.button === 0) {
+      this._isLeftMouseDown = true;
+    } else if (e.button === 2) {
+      // Toggle ADS on/off
+      this._isAdsToggled = !this._isAdsToggled;
+    }
+  };
+
+  private _onMouseUp = (e: MouseEvent): void => {
+    if (e.button === 0) {
+      this._isLeftMouseDown = false;
+    }
+  };
+
+  private _onWheel = (e: WheelEvent): void => {
+    if (!this._isLocked) return;
+    e.preventDefault();
+    this._isAdsToggled = false; // Weapon wheel switch disengages ADS
+    if (e.deltaY > 0) {
+      this._weaponSwitchDelta += 1;
+    } else if (e.deltaY < 0) {
+      this._weaponSwitchDelta -= 1;
+    }
+  };
+
+  private _onContextMenu = (e: MouseEvent): void => {
+    e.preventDefault();
+  };
+
   private _onMouseMove = (e: MouseEvent): void => {
     if (!this._isLocked) return;
     this._mouseDeltaX += e.movementX || 0;
@@ -171,6 +240,11 @@ export class InputManager {
     this._tacSprintTap = false;
     this._mouseDeltaX = 0;
     this._mouseDeltaY = 0;
+    this._isLeftMouseDown = false;
+    this._isAdsToggled = false;
+    this._reloadAction = false;
+    this._weaponSwitchDelta = 0;
+    this._directWeaponSlot = -1;
   }
 
   private _onPointerLockChange = (): void => {
@@ -262,6 +336,48 @@ export class InputManager {
 
   public get isShiftHeld(): boolean {
     return this._isShiftHeld;
+  }
+
+  public get isTriggerHeld(): boolean {
+    return this._isLeftMouseDown;
+  }
+
+  public get isAdsHeld(): boolean {
+    return this._isAdsToggled;
+  }
+
+  public cancelAds(): void {
+    this._isAdsToggled = false;
+  }
+
+  public setAdsToggled(val: boolean): void {
+    this._isAdsToggled = val;
+  }
+
+  public consumeReloadAction(): boolean {
+    const val = this._reloadAction;
+    this._reloadAction = false;
+    return val;
+  }
+
+  /**
+   * Consumes weapon switch intent:
+   * Returns positive delta, negative delta, or if direct slot selected, returns slot (0-3).
+   * Returns null if no switch intent.
+   */
+  public consumeWeaponSwitch(): { delta?: number; directSlot?: number } | null {
+    if (this._directWeaponSlot >= 0) {
+      const slot = this._directWeaponSlot;
+      this._directWeaponSlot = -1;
+      this._weaponSwitchDelta = 0;
+      return { directSlot: slot };
+    }
+    if (this._weaponSwitchDelta !== 0) {
+      const delta = this._weaponSwitchDelta > 0 ? 1 : -1;
+      this._weaponSwitchDelta = 0;
+      return { delta };
+    }
+    return null;
   }
 
   public get isLocked(): boolean {

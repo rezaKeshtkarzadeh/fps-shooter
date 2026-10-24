@@ -87,6 +87,23 @@ export class PlayerRoot {
   }
 
   /**
+   * Directly injects procedural camera recoil offsets (radians).
+   * Positive deltaPitch kicks camera UP, deltaYaw offsets horizontal aim.
+   */
+  public applyRecoilOffset(deltaPitch: number, deltaYaw: number): void {
+    this._pitch += deltaPitch;
+    this._pitch = Math.max(
+      GAME_CONFIG.camera.minPitch,
+      Math.min(GAME_CONFIG.camera.maxPitch, this._pitch)
+    );
+    this.cameraPitch.rotation.x = this._pitch;
+
+    this._yaw += deltaYaw;
+    this._yaw = ((this._yaw + Math.PI) % (2 * Math.PI)) - Math.PI;
+    this.root.rotation.y = this._yaw;
+  }
+
+  /**
    * Updates camera procedural kinematics (Spring damp, Lissajous bob, Dutch roll)
    */
   public updateKinematics(delta: number, horizontalSpeed: number, isGrounded: boolean): void {
