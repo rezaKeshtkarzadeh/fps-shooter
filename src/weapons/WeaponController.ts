@@ -10,6 +10,7 @@ import { ALL_WEAPONS } from './weaponConfigs.ts';
 import { CollisionGroups, createInteractionGroups } from '../config/gameConfig.ts';
 import { PhysicsWorld } from '../core/PhysicsWorld.ts';
 import type { LocomotionState } from '../player/LocomotionFSM.ts';
+import { AcousticManager } from '../ai/perception/AcousticManager.ts';
 
 export interface WeaponFeedback {
   weaponName: string;
@@ -36,6 +37,7 @@ export class WeaponController {
   private _sway: ViewmodelSway;
   private _physicsWorld: PhysicsWorld;
   private _targets: HitboxTarget[] = [];
+  private _botHitResolver: ((colliderHandle: number, distance: number, def: WeaponDefinition) => { hit: boolean; killed: boolean; damage: number; zone: HitZone } | null) | null = null;
 
   // ADS
   private _adsProgress: number = 0; // 0 = hip, 1 = fully ADS
@@ -94,6 +96,10 @@ export class WeaponController {
 
   public setRecoilCallback(cb: (deltaPitch: number, deltaYaw: number) => void): void {
     this._applyRecoilCallback = cb;
+  }
+
+  public setBotHitResolver(resolver: (colliderHandle: number, distance: number, def: WeaponDefinition) => { hit: boolean; killed: boolean; damage: number; zone: HitZone } | null): void {
+    this._botHitResolver = resolver;
   }
 
   public registerTarget(target: HitboxTarget): void {
@@ -271,6 +277,7 @@ export class WeaponController {
   ): void {
     // 0. Trigger visual muzzle flash
     this._viewmodel.triggerMuzzleFlash();
+    AcousticManager.getInstance().emitSound('GUNSHOT', cameraOrigin, 60.0, 1.0, 'PLAYER');
 
     // 1. Camera recoil kick
     const pitchKick =
@@ -326,7 +333,7 @@ export class WeaponController {
 
     const filterGroups = createInteractionGroups(
       CollisionGroups.GROUP_HITSCAN,
-      CollisionGroups.GROUP_HITSCAN | CollisionGroups.GROUP_ENVIRONMENT
+      CollisionGroups.GROUP_HITSCAN | CollisionGroups.GROUP_ENVIRONMENT | CollisionGroups.GROUP_BOT
     );
 
     const hit = this._physicsWorld.world.castRayAndGetNormal(
@@ -340,6 +347,20 @@ export class WeaponController {
     if (!hit) return;
 
     const distance = hit.timeOfImpact;
+
+    // Check hit tactical bots
+    if (this._botHitResolver) {
+      const botHit = this._botHitResolver(hit.collider.handle, distance, def);
+      if (botHit && botHit.hit) {
+        this._lastHitDamage = botHit.damage;
+        this._lastHitZone = botHit.zone;
+        this._hitmarkerTimer = 0.2;
+        if (botHit.killed) {
+          this._killmarkerTimer = 0.45;
+        }
+        return;
+      }
+    }
 
     // Check hit target dummies
     for (const target of this._targets) {

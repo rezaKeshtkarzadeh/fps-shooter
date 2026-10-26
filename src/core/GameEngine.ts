@@ -6,6 +6,11 @@ import { PlayerRoot } from '../player/PlayerRoot.ts';
 import { CharacterController, type CharacterState } from '../player/CharacterController.ts';
 import { GreyboxArena } from '../world/GreyboxArena.ts';
 import { WeaponController, type WeaponFeedback } from '../weapons/WeaponController.ts';
+import { calculateDamage } from '../weapons/types.ts';
+import { BotManager } from '../ai/BotManager.ts';
+import type { BotDifficultyLevel, BotTelemetry } from '../ai/types.ts';
+import type { DebugVisualOptions } from '../ai/debug/AIDebugRenderer.ts';
+import { PlayerHealth, type PlayerDamageFeedback } from '../player/PlayerHealth.ts';
 import { GAME_CONFIG } from '../config/gameConfig.ts';
 
 export interface EngineCallbacks {
@@ -13,6 +18,8 @@ export interface EngineCallbacks {
   onCharacterState?: (state: CharacterState) => void;
   onWeaponFeedback?: (feedback: WeaponFeedback) => void;
   onLockChange?: (locked: boolean) => void;
+  onBotTelemetry?: (telemetry: BotTelemetry[]) => void;
+  onPlayerHealthFeedback?: (feedback: PlayerDamageFeedback) => void;
 }
 
 export class GameEngine {
@@ -22,6 +29,8 @@ export class GameEngine {
   public playerRoot!: PlayerRoot;
   public characterController!: CharacterController;
   public weaponController!: WeaponController;
+  public botManager!: BotManager;
+  public playerHealth!: PlayerHealth;
   public inputManager!: InputManager;
   public arena!: GreyboxArena;
   public gameLoop!: GameLoop;
@@ -99,6 +108,27 @@ export class GameEngine {
 
     // Register all target dummies from the arena
     for (const target of this.arena.targets) {
+
+
+    // 10. Setup Player Health & Tactical Bot AI Squad (Phase 5)
+    this.playerHealth = new PlayerHealth(() => this._onPlayerDeath());
+    this.botManager = new BotManager(this.scene, this.physicsWorld);
+
+    // Wire player weapons to hit tactical bots
+    this.weaponController.setBotHitResolver((colliderHandle, distance, def) => {
+      const hitRes = this.botManager.resolveHit(colliderHandle);
+      if (hitRes) {
+        const damage = calculateDamage(distance, def.damage, hitRes.zone);
+        const killRes = hitRes.bot.applyDamage(damage, hitRes.zone);
+        return {
+          hit: true,
+          killed: killRes.killed,
+          damage,
+          zone: hitRes.zone,
+        };
+      }
+      return null;
+    });
       this.weaponController.registerTarget(target);
     }
 
@@ -212,6 +242,39 @@ export class GameEngine {
       }
     }
 
+    // Advance Bot Tactical AI Simulation
+    if (this.botManager && this.playerHealth) {
+      this.playerHealth.update(fixedDelta);
+
+      const camPos = new THREE.Vector3();
+      this.playerRoot.camera.getWorldPosition(camPos);
+      const playerPos = new THREE.Vector3(camPos.x, camPos.y - 1.6, camPos.z);
+      const charState = this.characterController.getState();
+      const playerVel = new THREE.Vector3(
+        charState.velocity.x,
+        charState.velocity.y,
+        charState.velocity.z
+      );
+
+      this.botManager.update(
+        fixedDelta,
+        playerPos,
+        playerVel,
+        camPos,
+        !this.playerHealth.isDead,
+        (damage, zone) => {
+          this.playerHealth.takeDamage(damage, zone, undefined, playerPos);
+        }
+      );
+
+      if (this._callbacks.onPlayerHealthFeedback) {
+        this._callbacks.onPlayerHealthFeedback(this.playerHealth.getFeedback());
+      }
+      if (this._callbacks.onBotTelemetry) {
+        this._callbacks.onBotTelemetry(this.botManager.getTelemetry());
+      }
+    }
+
     // Broadcast state for UI telemetry
     if (this._callbacks.onCharacterState) {
       this._callbacks.onCharacterState(this.characterController.getState());
@@ -258,6 +321,34 @@ export class GameEngine {
     }
   };
 
+  public setBotDifficulty(level: BotDifficultyLevel): void {
+    if (this.botManager) {
+      this.botManager.setDifficulty(level);
+    }
+  }
+
+  public setBotSquadCount(count: number): void {
+    if (this.botManager) {
+      this.botManager.spawnSquad(count, this.botManager.currentDifficulty);
+    }
+  }
+
+  public setDebugVisualOption(key: keyof DebugVisualOptions, val: boolean): void {
+    if (this.botManager) {
+      this.botManager.debugRenderer.options[key] = val;
+    }
+  }
+
+  private _onPlayerDeath(): void {
+    setTimeout(() => {
+      if (this._isDestroyed) return;
+      const spawn = GAME_CONFIG.controller.spawnPosition;
+      this.characterController.body.setNextKinematicTranslation(spawn);
+      this.playerRoot.setPosition(spawn.x, spawn.y, spawn.z);
+      this.playerHealth.respawn();
+    }, 3500);
+  }
+
   public requestLock(): void {
     this.inputManager.requestPointerLock();
   }
@@ -268,6 +359,7 @@ export class GameEngine {
     if (this.gameLoop) this.gameLoop.stop();
     if (this.inputManager) this.inputManager.dispose();
     if (this.weaponController) this.weaponController.dispose();
+    if (this.botManager) this.botManager.dispose();
     if (this.renderer) this.renderer.dispose();
   }
 }

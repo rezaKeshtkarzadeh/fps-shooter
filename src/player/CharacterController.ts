@@ -9,6 +9,7 @@ import { StanceManager } from './StanceManager.ts';
 import { SlideController } from './SlideController.ts';
 import { MantleScanner } from './MantleScanner.ts';
 import { LadderController } from './LadderController.ts';
+import { AcousticManager } from '../ai/perception/AcousticManager.ts';
 
 export interface CharacterState {
   position: { x: number; y: number; z: number };
@@ -41,6 +42,7 @@ export class CharacterController {
   private _isGrounded: boolean = false;
   private _isCeilingBlocked: boolean = false;
   private _isSprintToggled: boolean = false;
+  private _footstepTimer: number = 0;
 
   // Temp vectors
   private _tempForward: THREE.Vector3 = new THREE.Vector3();
@@ -630,6 +632,40 @@ export class CharacterController {
 
     this.body.setNextKinematicTranslation(nextPos);
     this._playerRoot.setPosition(nextPos.x, nextPos.y, nextPos.z);
+
+    // Acoustic Footstep generation for tactical bot perception
+    const horizSpeedSq = this._velocity.x * this._velocity.x + this._velocity.z * this._velocity.z;
+    if (this._isGrounded && horizSpeedSq > 1.0) {
+      this._footstepTimer += fixedDelta;
+      let interval = 0.42;
+      let radius = 8.0;
+      let intensity = 0.5;
+
+      if (this.fsm.state === 'TACTICAL_SPRINT') {
+        interval = 0.25;
+        radius = 20.0;
+        intensity = 1.0;
+      } else if (this.fsm.state === 'SPRINT') {
+        interval = 0.32;
+        radius = 14.0;
+        intensity = 0.8;
+      } else if (this.fsm.state === 'SLIDE') {
+        interval = 0.22;
+        radius = 16.0;
+        intensity = 0.85;
+      } else if (this.fsm.state === 'CROUCH') {
+        interval = 0.55;
+        radius = 3.5;
+        intensity = 0.2;
+      }
+
+      if (this._footstepTimer >= interval) {
+        this._footstepTimer = 0;
+        AcousticManager.getInstance().emitSound('FOOTSTEP', nextPos, radius, intensity, 'PLAYER');
+      }
+    } else {
+      this._footstepTimer = 0;
+    }
   }
 
   public getState(): CharacterState {
